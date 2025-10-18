@@ -1,11 +1,15 @@
 #include <iostream>
-//#include <errno.h>
-
+#include <vector>
+typedef std::vector<unsigned char> byte_arr;
+typedef struct event {
+	unsigned int delta_time;
+	unsigned char type;
+	byte_arr event_data;
+} event;;
 typedef struct chunk {
-	char* type;
+	std::string type;
 	unsigned int length;
-	unsigned int** meta;
-	unsigned int** data;
+	std::vector<event> data;
 } chunk;
 
 void handle_error(errno_t err) {
@@ -19,68 +23,78 @@ void handle_error(errno_t err) {
 	case 0:
 		return;
 	default:
-		std::cerr << "Unknown error code: "  << err << std::endl;
+		std::cerr << "Unknown error code: "  << strerror(err) << std::endl;
 		break;
 	}
 	exit(1);
 }
 
 FILE* open_file(const char* filename, const char* mode) {
-	FILE* file = nullptr;
-	errno_t err = fopen_s(&file,filename,mode);
-	if(err != 0) 
-		handle_error(err);
+	FILE *file = fopen(filename,mode);
+	if(!file) 
+		handle_error(errno);
 	return file;
 }
 
 void close_file(FILE* file) {
 	if (fclose(file) != 0) {
-		std::cerr << "Error closing file" << std::endl;
+		std::cerr << "Error closing file: " << strerror(errno) << std::endl;
+		//handle_error(errno);
 		exit(1);
 	}
 }
 
-bool compare_bytes(int* buffer, int* bytes, int length) {
+bool compare_bytes(byte_arr buffer, byte_arr bytes, int length) {
 	for (int i = 0; i < length; i++) 
 		if (buffer[i] != bytes[i]) return false;
 	return true;
 }
 
-unsigned int get_byte(FILE* file) {
+/*unsigned int get_byte(FILE* file) {
 	unsigned int byte = getc(file);
-	/*if (byte == EOF) {
+	if (byte == EOF) {
 		std::cerr << "End of file reached" << std::endl;
 		return EOF;
-	}*/
+	}
 	return byte;
-}
+}*/
 
-unsigned int *get_word(unsigned int *buffer, FILE* file, int bytes) {
-	if (buffer) free(buffer);
-	buffer = nullptr;
-	unsigned int c = get_byte(file);
-	/*for (int i = 0; c != EOF; c = get_byte(file), i++) {
-		buffer = buffer ? (int*)realloc(buffer, sizeof(int) * (i+1)) : (int*)malloc(sizeof(int));
-		buffer[i] = c;
-		//figure out how to do this dumbassssssss
-		if (compare_bytes(buffer, std::begin({ 0x4D, 0x54, 0x68, 0x64 }), sizeof(buffer) / sizeof(buffer[0]))) {
-			return;
-		}
-	}*/
+byte_arr get_word(byte_arr buffer, FILE* file, int bytes) {
+	buffer.clear();
 	for (int i = 0; i < bytes; i++) {
-		buffer = buffer ? (unsigned int*)realloc(buffer, sizeof(unsigned int) * (i+1)) : (unsigned int*)malloc(sizeof(unsigned int));
-		buffer[i] = c;
-		c = get_byte(file);
+		int c = getc(file);
+		if (c == EOF) {
+			std::cerr << "Unexpected end of file\n";
+			break; 
+		}
+		buffer.push_back(static_cast<unsigned char>(c));
 	}
 	return buffer;
 }
 
 chunk read_header(FILE* file) {
 	chunk header;
-	unsigned int* buffer = nullptr; get_word(buffer, file, 4);
-	unsigned int** words = (unsigned int**)malloc(sizeof(unsigned int*));
-	words[0] = get_word(words[0], file, 4);
-	//figure out how to parse the header
+	byte_arr buffer = get_word(buffer, file, 4);//MThd
+	header.type = std::string(buffer.begin(), buffer.end());
+	buffer = get_word(buffer, file, 4);//length
+	header.length = (uint32_t)((buffer[0] << 24) | (buffer[1] << 16) | (buffer[2] << 8) | buffer[3]);
+	uint32_t len = header.length;
+	while (len > 0) {
+		buffer = get_word(buffer, file, 2);//format, ntrks, division
+		header.data.push_back({ 0, 0, buffer });
+		len -= 2;
+	}
+	if (header.type != "MThd") {
+		std::cerr << "Invalid MIDI file" << std::endl;
+		close_file(file);
+		exit(1);
+	}
+	if ((header.data[0].event_data[0] << 8 | header.data[0].event_data[1]) != 0 || (header.data[1].event_data[0] << 8 | header.data[1].event_data[1]) != 1) {
+		std::cerr << "Unsupported MIDI format or number of tracks" << std::endl;
+		//add format 1 later
+		close_file(file);
+		exit(1);
+	}
 	return header;
 }
 
@@ -88,15 +102,16 @@ int main(int argc, char* argv[]){
     std::cout << "Hello World!\n";
 	std::string filename = argv[1];
 	FILE *f = open_file(filename.c_str(), "rb");
-	unsigned int* word = nullptr; get_word(word, f, 4);
-	std::cout << std::hex <<  << std::endl;
+	std::cout << "Opened file: " << filename << std::endl;
+	chunk header = read_header(f);
+
+	std::cout << header.type << std::endl;
+	for(unsigned int i = 0; i < header.data.size(); i++)
+		std::cout << std::hex << (int)(header.data[i].event_data[0] << 8 | header.data[i].event_data[1]) << " ";
+
+	close_file(f);
 	return 0;
 }
-
-//just make a fucking word struct/class
-
-
-
 
 /*
 values needed to find in file:
@@ -104,7 +119,7 @@ values needed to find in file:
 0x00 0x00 0x00 0x06 - header length
 0x00 0x00 - format type (just check if it's 0)
 0x00 0x01 - number of tracks (just check if it's 1)
-0x00 0xXX - time division (96 ticks per quarter note)
+0x00 0xXX - time division
 0x4D 0x54 0x72 0x6B - track chunk
 0xXX 0xXX 0xXX 0xXX - track length
 0x00 0xFF 0x51 0x03 0xXX 0xXX 0xXX - set tempo (assume 120 bpm if not found)
