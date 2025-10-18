@@ -1,16 +1,4 @@
-#include <iostream>
-#include <vector>
-typedef std::vector<unsigned char> byte_arr;
-typedef struct event {
-	unsigned int delta_time;
-	unsigned char type;
-	byte_arr event_data;
-} event;;
-typedef struct chunk {
-	std::string type;
-	unsigned int length;
-	std::vector<event> data;
-} chunk;
+#include "midiconverterc.h"
 
 void handle_error(errno_t err) {
 	switch (err) {
@@ -29,25 +17,25 @@ void handle_error(errno_t err) {
 	exit(1);
 }
 
-FILE* open_file(const char* filename, const char* mode) {
+bool compare_bytes(byte_arr buffer, byte_arr bytes, int length) {
+	for (int i = 0; i < length; i++)
+		if (buffer[i] != bytes[i]) return false;
+	return true;
+}
+
+FILE* MidiConverter::open_file(const char* filename, const char* mode) {
 	FILE *file = fopen(filename,mode);
 	if(!file) 
 		handle_error(errno);
 	return file;
 }
 
-void close_file(FILE* file) {
+void MidiConverter::close_file(FILE* file) {
 	if (fclose(file) != 0) {
 		std::cerr << "Error closing file: " << strerror(errno) << std::endl;
 		//handle_error(errno);
 		exit(1);
 	}
-}
-
-bool compare_bytes(byte_arr buffer, byte_arr bytes, int length) {
-	for (int i = 0; i < length; i++) 
-		if (buffer[i] != bytes[i]) return false;
-	return true;
 }
 
 /*unsigned int get_byte(FILE* file) {
@@ -59,7 +47,7 @@ bool compare_bytes(byte_arr buffer, byte_arr bytes, int length) {
 	return byte;
 }*/
 
-byte_arr get_word(byte_arr buffer, FILE* file, int bytes) {
+byte_arr MidiConverter::get_word(byte_arr buffer, FILE* file, int bytes) {
 	buffer.clear();
 	for (int i = 0; i < bytes; i++) {
 		int c = getc(file);
@@ -72,7 +60,7 @@ byte_arr get_word(byte_arr buffer, FILE* file, int bytes) {
 	return buffer;
 }
 
-chunk read_header(FILE* file) {
+chunk MidiConverter::read_header(FILE* file) {
 	chunk header;
 	byte_arr buffer = get_word(buffer, file, 4);//MThd
 	header.type = std::string(buffer.begin(), buffer.end());
@@ -98,20 +86,22 @@ chunk read_header(FILE* file) {
 	return header;
 }
 
-int main(int argc, char* argv[]){
-    std::cout << "Hello World!\n";
-	std::string filename = argv[1];
-	FILE *f = open_file(filename.c_str(), "rb");
-	std::cout << "Opened file: " << filename << std::endl;
-	chunk header = read_header(f);
+void MidiConverter::convert(const char* input_filename, const char* output_filename) {
+	FILE* input_file = open_file(input_filename, "rb");
+	std::cout << "Opened file: " << input_filename << std::endl;
+	FILE* output_file = open_file(output_filename, "wb");
+	std::cout << "Opened file: " << output_filename << std::endl;
+	
+	chunk header = read_header(input_file);
+	std::cout << header.type << " chunk read, length: " << header.length << std::endl;
+	std::cout << "Format type: " << ((header.data[0].event_data[0] << 8) | header.data[0].event_data[1]) << std::endl;
+	std::cout << "Number of tracks: " << ((header.data[1].event_data[0] << 8) | header.data[1].event_data[1]) << std::endl;
+	std::cout << "Time division: " << ((header.data[2].event_data[0] << 8) | header.data[2].event_data[1]) << std::endl;
 
-	std::cout << header.type << std::endl;
-	for(unsigned int i = 0; i < header.data.size(); i++)
-		std::cout << std::hex << (int)(header.data[i].event_data[0] << 8 | header.data[i].event_data[1]) << " ";
-
-	close_file(f);
-	return 0;
+	close_file(input_file);
+	close_file(output_file);
 }
+
 
 /*
 values needed to find in file:
