@@ -1,5 +1,7 @@
 #include "midiconverterc.h"
-void handle_error(errno_t err) {
+#include <cerrno>
+#include <cstring>
+void handle_error(int err) {
 	switch (err) {
 	case ENOENT:
 		std::cerr << "File not found" << std::endl;
@@ -37,22 +39,14 @@ void MidiConverter::close_file(FILE* file) {
 	}
 }
 
-/*unsigned int get_byte(FILE* file) {
-	unsigned int byte = getc(file);
-	if (byte == EOF) {
-		std::cerr << "End of file reached" << std::endl;
-		return EOF;
-	}
-	return byte;
-}*/
-
 byte_arr MidiConverter::get_word(byte_arr buffer, FILE* file, int bytes) {
 	buffer.clear();
 	for (int i = 0; i < bytes; i++) {
 		int c = getc(file);
 		if (c == EOF) {
-			std::cerr << "Unexpected end of file\n";
-			break; 
+			std::cout << "End of file\n";
+			buffer.clear();
+			return buffer;
 		}
 		buffer.push_back(static_cast<uint8_t>(c));
 	}
@@ -76,12 +70,12 @@ chunk MidiConverter::read_header(FILE* file) {
 		header.data.push_back({ 0, 0, buffer });
 		len -= 2;
 	}
-	if ((header.data[0].event_data[0] << 8 | header.data[0].event_data[1]) != 0 || (header.data[1].event_data[0] << 8 | header.data[1].event_data[1]) != 1) {
+	/*if ((header.data[0].event_data[0] << 8 | header.data[0].event_data[1]) != 0 || (header.data[1].event_data[0] << 8 | header.data[1].event_data[1]) != 1) {
 		std::cerr << "Unsupported MIDI format or number of tracks" << std::endl;
 		//add format 1 later
 		close_file(file);
 		exit(1);
-	}
+	}*/
 	return header;
 }
 
@@ -98,7 +92,6 @@ chunk MidiConverter::read_track(FILE* file) {
 	track.length = (uint32_t)((buffer[0] << 24) | (buffer[1] << 16) | (buffer[2] << 8) | buffer[3]);
 	uint32_t len = track.length;
 	while (len > 0) {
-		//std::variant<event, meta_event> ev;
 		event ev;
 		//read delta time
 		buffer = get_word(buffer, file, 1);
@@ -111,17 +104,9 @@ chunk MidiConverter::read_track(FILE* file) {
 		}
 		//read event type
 		buffer = get_word(buffer, file, 1);
-		/*if (buffer[0] == 0xFF)
-			ev = meta_event();
-		else
-			ev = event();
-		std::get<0>(ev).type = buffer[0];
-		std::get<0>(ev).delta_time = delta_time;*/
 		ev.type = buffer[0];
 		ev.delta_time = delta_time;
 		len--;
-		//read event data
-		//if (std::holds_alternative<event>(ev)) {
 		if (buffer[0] != 0xFF) {
 			uint8_t first_half = ev.type & 0xF0;
 			switch (first_half) {
@@ -168,12 +153,6 @@ chunk MidiConverter::read_track(FILE* file) {
 			len -= meta_data.size();
 			ev.event_data.insert(ev.event_data.end(), meta_data.begin(), meta_data.end());
 		}
-		/*if (std::holds_alternative<event>(ev)) {
-			track.data.push_back(std::get<event>(ev));
-		}
-		else {
-			//ignore meta events for now
-		}*/
 		track.data.push_back(ev);
 	}
 	return track;
@@ -184,22 +163,36 @@ void MidiConverter::convert(const char* input_filename, const char* output_filen
 	std::cout << "Opened file: " << input_filename << std::endl;
 	FILE* output_file = open_file(output_filename, "wb");
 	std::cout << "Opened file: " << output_filename << std::endl;
-	
-	chunk header = read_header(input_file);
-	std::cout << header.type << " chunk read, length: " << header.length << std::endl;
-	std::cout << "Format type: " << ((header.data[0].event_data[0] << 8) | header.data[0].event_data[1]) << std::endl;
-	std::cout << "Number of tracks: " << ((header.data[1].event_data[0] << 8) | header.data[1].event_data[1]) << std::endl;
-	std::cout << "Time division: " << ((header.data[2].event_data[0] << 8) | header.data[2].event_data[1]) << std::endl;
 
-	chunk track = read_track(input_file);
-	std::cout << track.type << " chunk read, length: " << track.length << std::endl;
-	for(int i = 0; i < track.data.size(); i++) {
-		event ev = track.data[i];
-		std::cout << "Event " << i << ": delta time: " << ev.delta_time << ", type: " << std::hex << (int)ev.type << ", data: ";
-		for (int j = 0; j < ev.event_data.size(); j++) {
-			std::cout << std::hex << (int)ev.event_data[j] << " ";
+	byte_arr buffer;
+	while (!(buffer = get_word(buffer, input_file, 4)).empty()) {
+		if (buffer.size() < 4) break;
+		std::string chunk_type = std::string(buffer.begin(), buffer.end());
+		if (chunk_type == "MThd") {
+			fseek(input_file, -4, SEEK_CUR); //go back to read full header
+			chunk header = read_header(input_file);
+			std::cout << header.type << " chunk read, length: " << header.length << std::endl;
+			std::cout << "Format type: " << ((header.data[0].event_data[0] << 8) | header.data[0].event_data[1]) << std::endl;
+			std::cout << "Number of tracks: " << ((header.data[1].event_data[0] << 8) | header.data[1].event_data[1]) << std::endl;
+			std::cout << "Time division: " << ((header.data[2].event_data[0] << 8) | header.data[2].event_data[1]) << std::endl;
 		}
-		std::cout << std::dec << std::endl;
+		else if(chunk_type == "MTrk"){
+			fseek(input_file, -4, SEEK_CUR); //go back to read full header
+			chunk track = read_track(input_file);
+			std::cout << track.type << " chunk read, length: " << track.length << std::endl;
+			for (int i = 0; i < track.data.size(); i++) {
+				event ev = track.data[i];
+				std::cout << "Event " << i << ": delta time: " << ev.delta_time << ", type: " << std::hex << (int)ev.type << ", data: ";
+				for (int j = 0; j < ev.event_data.size(); j++) {
+					std::cout << std::hex << (int)ev.event_data[j] << " ";
+				}
+				std::cout << std::dec << std::endl;
+			}
+		}
+		else {
+			std::cerr << "Unknown chunk type: " << chunk_type << std::endl;
+			break;
+		}
 	}
 
 	close_file(input_file);

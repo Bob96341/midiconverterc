@@ -1,6 +1,4 @@
 #pragma once
-#ifndef MIDICONVERTERC_H
-#define MIDICONVERTERC_H
 
 #include <iostream>
 #include <vector>
@@ -42,6 +40,5 @@ public:
 	void convert(const char* input_filename, const char* output_filename);
 };
 
-void handle_error(errno_t err);
+void handle_error(int err);
 bool compare_bytes(byte_arr buffer, byte_arr bytes, int length);
-#endif
