@@ -1,5 +1,4 @@
 #include "midiconverterc.h"
-
 void handle_error(errno_t err) {
 	switch (err) {
 	case ENOENT:
@@ -55,7 +54,7 @@ byte_arr MidiConverter::get_word(byte_arr buffer, FILE* file, int bytes) {
 			std::cerr << "Unexpected end of file\n";
 			break; 
 		}
-		buffer.push_back(static_cast<unsigned char>(c));
+		buffer.push_back(static_cast<uint8_t>(c));
 	}
 	return buffer;
 }
@@ -64,6 +63,11 @@ chunk MidiConverter::read_header(FILE* file) {
 	chunk header;
 	byte_arr buffer = get_word(buffer, file, 4);//MThd
 	header.type = std::string(buffer.begin(), buffer.end());
+	if (header.type != "MThd") {
+		std::cerr << "Invalid MIDI file" << std::endl;
+		close_file(file);
+		exit(1);
+	}
 	buffer = get_word(buffer, file, 4);//length
 	header.length = (uint32_t)((buffer[0] << 24) | (buffer[1] << 16) | (buffer[2] << 8) | buffer[3]);
 	uint32_t len = header.length;
@@ -72,11 +76,6 @@ chunk MidiConverter::read_header(FILE* file) {
 		header.data.push_back({ 0, 0, buffer });
 		len -= 2;
 	}
-	if (header.type != "MThd") {
-		std::cerr << "Invalid MIDI file" << std::endl;
-		close_file(file);
-		exit(1);
-	}
 	if ((header.data[0].event_data[0] << 8 | header.data[0].event_data[1]) != 0 || (header.data[1].event_data[0] << 8 | header.data[1].event_data[1]) != 1) {
 		std::cerr << "Unsupported MIDI format or number of tracks" << std::endl;
 		//add format 1 later
@@ -84,6 +83,100 @@ chunk MidiConverter::read_header(FILE* file) {
 		exit(1);
 	}
 	return header;
+}
+
+chunk MidiConverter::read_track(FILE* file) {
+	chunk track;
+	byte_arr buffer = get_word(buffer, file, 4);//MTrk
+	track.type = std::string(buffer.begin(), buffer.end());
+	if (track.type != "MTrk") {
+		std::cerr << "Invalid MIDI file" << std::endl;
+		close_file(file);
+		exit(1);
+	}
+	buffer = get_word(buffer, file, 4);//length
+	track.length = (uint32_t)((buffer[0] << 24) | (buffer[1] << 16) | (buffer[2] << 8) | buffer[3]);
+	uint32_t len = track.length;
+	while (len > 0) {
+		//std::variant<event, meta_event> ev;
+		event ev;
+		//read delta time
+		buffer = get_word(buffer, file, 1);
+		uint32_t delta_time = (uint32_t)buffer[0];
+		len--;
+		while (buffer[0] & 0x80) {
+			buffer = get_word(buffer, file, 1);
+			delta_time = (delta_time << 7) | (buffer[0] & 0x7F);
+			len--;
+		}
+		//read event type
+		buffer = get_word(buffer, file, 1);
+		/*if (buffer[0] == 0xFF)
+			ev = meta_event();
+		else
+			ev = event();
+		std::get<0>(ev).type = buffer[0];
+		std::get<0>(ev).delta_time = delta_time;*/
+		ev.type = buffer[0];
+		ev.delta_time = delta_time;
+		len--;
+		//read event data
+		//if (std::holds_alternative<event>(ev)) {
+		if (buffer[0] != 0xFF) {
+			uint8_t first_half = ev.type & 0xF0;
+			switch (first_half) {
+			case 0xC0:
+			case 0xD0:
+				buffer = get_word(buffer, file, 1);
+				ev.event_data = buffer;
+				len -= buffer.size();
+				break; //ignore
+			case 0xA0:
+			case 0xB0:
+			case 0xE0:
+				buffer = get_word(buffer, file, 2);
+				ev.event_data = buffer;
+				len -= buffer.size();
+				break; //ignore
+			case 0x90:
+			case 0x80:
+				buffer = get_word(buffer, file, 2);
+				ev.event_data = buffer;
+				len -= buffer.size();
+				break; //note on/off
+			default:
+				break;
+
+			}
+		}
+		else {
+			//meta event
+			buffer = get_word(buffer, file, 1); //meta type
+			ev.event_data.push_back(buffer[0]);
+			len--;
+			buffer = get_word(buffer, file, 1); //length
+			uint32_t meta_length = buffer[0];
+			ev.event_data.push_back(buffer[0]);
+			len--;
+			while (buffer[0] & 0x80) {
+				buffer = get_word(buffer, file, 1);
+				meta_length = (meta_length << 7) | (buffer[0] & 0x7F);
+				ev.event_data.push_back(buffer[0]);
+				len--;
+			}
+			byte_arr meta_data = get_word(buffer, file, meta_length);
+			len -= meta_data.size();
+			ev.event_data.insert(ev.event_data.end(), meta_data.begin(), meta_data.end());
+		}
+		/*if (std::holds_alternative<event>(ev)) {
+			track.data.push_back(std::get<event>(ev));
+		}
+		else {
+			//ignore meta events for now
+		}*/
+		track.data.push_back(ev);
+	}
+	return track;
 }
 
 void MidiConverter::convert(const char* input_filename, const char* output_filename) {
@@ -97,6 +190,17 @@ void MidiConverter::convert(const char* input_filename, const char* output_filen
 	std::cout << "Format type: " << ((header.data[0].event_data[0] << 8) | header.data[0].event_data[1]) << std::endl;
 	std::cout << "Number of tracks: " << ((header.data[1].event_data[0] << 8) | header.data[1].event_data[1]) << std::endl;
 	std::cout << "Time division: " << ((header.data[2].event_data[0] << 8) | header.data[2].event_data[1]) << std::endl;
+
+	chunk track = read_track(input_file);
+	std::cout << track.type << " chunk read, length: " << track.length << std::endl;
+	for(int i = 0; i < track.data.size(); i++) {
+		event ev = track.data[i];
+		std::cout << "Event " << i << ": delta time: " << ev.delta_time << ", type: " << std::hex << (int)ev.type << ", data: ";
+		for (int j = 0; j < ev.event_data.size(); j++) {
+			std::cout << std::hex << (int)ev.event_data[j] << " ";
+		}
+		std::cout << std::dec << std::endl;
+	}
 
 	close_file(input_file);
 	close_file(output_file);
@@ -141,6 +245,13 @@ if event code 0x90 or 0x80
 		note off
 	else
 		note on
+if event code 0xFF
+	meta event
+	if meta type 0x2F
+		end of track
+		break
+	else
+		use or ignore meta event
 
 stack for notes
 if event code 0x90
