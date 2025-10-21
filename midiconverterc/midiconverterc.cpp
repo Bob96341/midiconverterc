@@ -210,26 +210,27 @@ int MidiConverter::read_write_track(FILE* file, FILE* output_file) {
 				std::cout << std::hex << (int)ev[i].event_data[j] << " ";
 			}
 			std::cout << std::dec << std::endl;*/
+			uint8_t first_four = (ev[i].type & 0xF0);
 			if (ev[i].type == 0xFF && ev[i].event_data[0] == 0x2F) {
 				if (notesf > 0) 
 					std::cout << std::endl;
 				std::cout << "End of track event reached\n";
 				return 0;
 			}
-			if (ev[i].type == 0x90 || ev[i].type == 0x80) {
+			if (first_four == 0x90 || first_four == 0x80) {
 				uint8_t note = ev[i].event_data[0];
 				uint8_t velocity = ev[i].event_data[1];
 				std::string note_name = NOTE_NAMES[note % 12];
 				int octave = (note / 12) - 1;
 
-				if(ev[i].type == 0x90 && velocity != 0) {
+				if(first_four == 0x90 && velocity != 0) {
 					//std::cout << "Note ON: " << note_name << octave << " Velocity: " << (int)velocity << std::endl;
 					ev[i].length = delta_time;
 				} 
-				else if(ev[i].type == 0x80 || (ev[i].type == 0x90 && velocity == 0)){
+				else if(first_four == 0x80 || (first_four == 0x90 && velocity == 0)){
 					int old_i = 0;
 					for (old_i = 0; old_i < events.size(); old_i++) {
-						if (events[old_i].type == 0x90 && events[old_i].event_data[0] == ev[i].event_data[0]) 
+						if ((events[old_i].type & 0xF0) == 0x90 && events[old_i].event_data[0] == ev[i].event_data[0] && ((ev[i].type & 0x0F) == (events[old_i].type & 0x0F)))
 							break;
 						//std::cout << "Searching for matching Note ON for Note OFF: " << note_name << octave << std::endl;
 						//std::cout << "Current index: " << old_i << ", Event type: " << std::hex << (int)events[old_i].type << std::dec << ", Note: " << (int)events[old_i].event_data[0] << std::endl;
@@ -248,7 +249,7 @@ int MidiConverter::read_write_track(FILE* file, FILE* output_file) {
 					notesf++;
 				}
 			}
-			else if (ev[i].type == 0xC0 || ev[i].type == 0xB0 || ev[i].type == 0xE0 || ev[i].type == 0xA0 || ev[i].type == 0xD0) {
+			else if (first_four == 0xC0 || first_four == 0xB0 || first_four == 0xE0 || first_four == 0xA0 || first_four == 0xD0) {
 				//program change - ignore
 				delete_indices.push_back(i);
 			}
@@ -265,7 +266,7 @@ int MidiConverter::read_write_track(FILE* file, FILE* output_file) {
 					//key signature
 				}
 				else if (ev[i].event_data[0] == 0x03) {
-					std::string s = "[Track name: " + std::string(ev[i].event_data.begin() + 2, ev[i].event_data.end()) + "]";
+					std::string s = "\n[Track name: " + std::string(ev[i].event_data.begin() + 2, ev[i].event_data.end()) + "]";
 					std::cout << s << std::endl;
 					fprintf(output_file, (s+'\n').c_str());
 				}
@@ -283,6 +284,7 @@ int MidiConverter::read_write_track(FILE* file, FILE* output_file) {
 		for (int i = 0; i < ev.size(); i++, last_pos++) {
 			events.push_back(ev[i]);
 		}
+		//if events vector is empty of notes, add silence indicator and length
 	}
 	return 0;
 }
