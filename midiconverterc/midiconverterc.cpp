@@ -82,12 +82,20 @@ event MidiConverter::read_event(FILE* file) {
 	event ev;
 	//read delta time
 	byte_arr buffer = get_word(buffer, file, 1);
-	uint32_t delta_time = (uint32_t)buffer[0];
+	byte_arr delta;
+	delta.push_back(buffer[0]);
+	uint32_t delta_time = 0;
 	ev.length = 1;
 	while (buffer[0] & 0x80) {
 		buffer = get_word(buffer, file, 1);
-		delta_time = (delta_time << 7) | (buffer[0] & 0x7F);
+		delta.push_back(buffer[0]);
 		ev.length++;
+	}
+	for (size_t i = 0; i < delta.size(); i++) {
+		delta_time = (delta_time << 7) | (delta[i] & 0x7F);
+		if ((delta[i] & 0x80) == 0) { 
+			break;
+		}
 	}
 	//read event type
 	buffer = get_word(buffer, file, 1);
@@ -161,9 +169,11 @@ chunk MidiConverter::read_track(FILE* file) {
 int MidiConverter::read_write_track(FILE* file, FILE* output_file) {
 	byte_arr buffer = get_word(buffer, file, 4);//length
 	uint32_t len = (uint32_t)((buffer[0] << 24) | (buffer[1] << 16) | (buffer[2] << 8) | buffer[3]);
+	std::vector<event> events;
+	int last_pos = 0;
+	uint32_t delta_time = 0, next_delta_time = 0;
 	while (len > 0) {
 		std::vector<event> ev;
-		uint32_t delta_time = 0, next_delta_time = 0;
 		ev.push_back(read_event(file));
 		/*std::cout << "Read event with delta time: " << ev[0].delta_time << std::endl;
 		std::cout << "Event type: " << std::hex << (int)ev[0].type << std::dec << std::endl;
@@ -172,21 +182,37 @@ int MidiConverter::read_write_track(FILE* file, FILE* output_file) {
 		for (int j = 0; j < ev[0].event_data.size(); j++) {
 			std::cout << std::hex << (int)ev[0].event_data[j] << " ";
 		}*/
-		for (int i = 0; ev[i].delta_time != 0; i++, ev.push_back(read_event(file))) {
-			if (ev[i].delta_time != 0) {
-				next_delta_time = delta_time + ev[i].delta_time;
-				/*fseek(file, -ev[i].length, SEEK_CUR);
-				ev.pop_back();*/
-				break; //this part will fail if the next time step doesn't have a note event
+		for (int i = 0; (ev[i].delta_time == 0) || (i == 0); i++, ev.push_back(read_event(file))) {
+			/*std::cout << "event: " << ev[i].delta_time << ", type: " << std::hex << (int)ev[i].type << ", data: ";
+			for (int j = 0; j < ev[i].event_data.size(); j++) {
+				std::cout << std::hex << (int)ev[i].event_data[j] << " ";
 			}
-			len -= ev[i].length; //event.length might be irrelevant
+			std::cout << std::dec << std::endl;*/
+			if ((ev[i].delta_time != 0 && i != 0) || (ev[i].type == 0xFF && ev[i].event_data[0] == 0x2F)) {
+				next_delta_time = delta_time + ev[i].delta_time;
+				break; //this part will probably fail if the next time step doesn't have a note event
+			}
 			
 		}
+		next_delta_time = delta_time + ev.back().delta_time;
+		//std::cout << next_delta_time << std::endl;
+		if (!(ev.back().type == 0xFF && ev.back().event_data[0] == 0x2F)) {
+			fseek(file, -(int)ev.back().length, SEEK_CUR);
+			ev.pop_back();
+		}
 		std::vector<int> delete_indices;
+		int notesf = 0;
 		for(int i = 0; i < ev.size(); i++) {
+			if (i > 0 && ev[i].delta_time != 0) break;
+			/*std::cout << "Processing event " << i << ": delta time: " << ev[i].delta_time << ", type: " << std::hex << (int)ev[i].type << ", data: ";
+			for( int j = 0; j < ev[i].event_data.size(); j++) {
+				std::cout << std::hex << (int)ev[i].event_data[j] << " ";
+			}
+			std::cout << std::dec << std::endl;*/
 			if (ev[i].type == 0xFF && ev[i].event_data[0] == 0x2F) {
+				if (notesf > 0)
+					std::cout << std::endl;
 				std::cout << "End of track event reached\n";
-				//process everything left in ev here
 				return 0;
 			}
 			if (ev[i].type == 0x90 || ev[i].type == 0x80) {
@@ -196,17 +222,37 @@ int MidiConverter::read_write_track(FILE* file, FILE* output_file) {
 				int octave = (note / 12) - 1;
 
 				if(ev[i].type == 0x90 && velocity != 0) {
-					std::cout << "Note ON: " << note_name << octave << " Velocity: " << (int)velocity << std::endl;
+					//std::cout << "Note ON: " << note_name << octave << " Velocity: " << (int)velocity << std::endl;
+					ev[i].length = delta_time;
 				} 
 				else if(ev[i].type == 0x80 || (ev[i].type == 0x90 && velocity == 0)){
-					std::cout << "Note OFF: " << note_name << octave << std::endl;
+					int old_i = 0;
+					for (old_i = 0; old_i < events.size(); old_i++) {
+						if (events[old_i].type == 0x90 && events[old_i].event_data[0] == ev[i].event_data[0]) 
+							break;
+						//std::cout << "Searching for matching Note ON for Note OFF: " << note_name << octave << std::endl;
+						//std::cout << "Current index: " << old_i << ", Event type: " << std::hex << (int)events[old_i].type << std::dec << ", Note: " << (int)events[old_i].event_data[0] << std::endl;
+					}
+					events[old_i].length = delta_time - events[old_i].length;
+					if (notesf == 0)
+						std::cout << "Note: " << note_name << octave << " " << events[old_i].length * microseconds_per_tick;
+					else
+						std::cout << ", Note: " << note_name << octave << " " << events[old_i].length * microseconds_per_tick;
 					delete_indices.push_back(i);
+					events.erase(events.begin() + old_i);
+					last_pos--;
+					notesf++;
 				}
+			}
+			else if (ev[i].type == 0xC0 || ev[i].type == 0xB0 || ev[i].type == 0xE0 || ev[i].type == 0xA0 || ev[i].type == 0xD0) {
+				//program change - ignore
+				delete_indices.push_back(i);
 			}
 			else if (ev[i].type == 0xFF) {
 				//could replace with switch probably
 				if (ev[i].event_data[0] == 0x51) {
-					//set tempo
+					tempo = (ev[i].event_data[2] << 16) | (ev[i].event_data[3] << 8) | ev[i].event_data[4];
+					microseconds_per_tick = tempo / time_division;
 				}
 				else if (ev[i].event_data[0] == 0x58) {
 					//time signature
@@ -215,14 +261,20 @@ int MidiConverter::read_write_track(FILE* file, FILE* output_file) {
 					//key signature
 				}
 				else if (ev[i].event_data[0] == 0x03) {
-					//track name
+					std::cout << "[Track name: " << std::string(ev[i].event_data.begin() + 2, ev[i].event_data.end()) << "]" << std::endl;
 				}
 				delete_indices.push_back(i);
 			}
-			for(int i = delete_indices.size() - 1; i >= 0; i--)
-				ev.erase(ev.begin() + delete_indices[i]);
 		}
-		//process concurrent events here then set delta_time to next_delta_time
+		if(notesf > 0)
+			std::cout << std::endl;
+		for (int j = delete_indices.size() - 1; j >= 0; j--)
+			ev.erase(ev.begin() + delete_indices[j]);
+		delta_time = next_delta_time;
+		//std::cout << "delta_time: " << delta_time << std::endl;
+		for (int i = 0; i < ev.size(); i++, last_pos++) {
+			events.push_back(ev[i]);
+		}
 	}
 	return 0;
 }
@@ -232,6 +284,8 @@ void MidiConverter::convert(const char* input_filename, const char* output_filen
 	std::cout << "Opened file: " << input_filename << std::endl;
 	FILE* output_file = open_file(output_filename, "w");
 	std::cout << "Opened file: " << output_filename << std::endl;
+
+	tempo = 500000; //default
 
 	byte_arr buffer;
 	while (!(buffer = get_word(buffer, input_file, 4)).empty()) {
@@ -245,6 +299,7 @@ void MidiConverter::convert(const char* input_filename, const char* output_filen
 			std::cout << "Format type: " << ((header.data[0].event_data[0] << 8) | header.data[0].event_data[1]) << std::endl;
 			std::cout << "Number of tracks: " << ((header.data[1].event_data[0] << 8) | header.data[1].event_data[1]) << std::endl;
 			std::cout << "Time division: " << ((header.data[2].event_data[0] << 8) | header.data[2].event_data[1]) << std::endl;
+			microseconds_per_tick = tempo / time_division;
 		}
 		else if(chunk_type == "MTrk"){
 			char c;
