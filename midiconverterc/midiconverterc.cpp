@@ -171,6 +171,7 @@ int MidiConverter::read_write_track(FILE* file, FILE* output_file) {
 				ev.pop_back();*/
 				break; //this part will fail if the next time step doesn't have a note event
 			}
+			len -= ev[i].length;
 			
 		}
 		//process concurrent events here then set delta_time to next_delta_time
