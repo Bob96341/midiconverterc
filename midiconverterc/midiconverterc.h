@@ -3,6 +3,7 @@
 #include <iostream>
 #include <vector>
 #include <variant>
+#include <cstdint>
 
 typedef std::vector<uint8_t> byte_arr;
 typedef struct event {
