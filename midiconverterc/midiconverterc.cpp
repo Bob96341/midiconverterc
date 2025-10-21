@@ -1,6 +1,7 @@
 #include "midiconverterc.h"
 #include <cerrno>
 #include <cstring>
+#include <string>
 void handle_error(int err) {
 	switch (err) {
 	case ENOENT:
@@ -210,7 +211,7 @@ int MidiConverter::read_write_track(FILE* file, FILE* output_file) {
 			}
 			std::cout << std::dec << std::endl;*/
 			if (ev[i].type == 0xFF && ev[i].event_data[0] == 0x2F) {
-				if (notesf > 0)
+				if (notesf > 0) 
 					std::cout << std::endl;
 				std::cout << "End of track event reached\n";
 				return 0;
@@ -234,10 +235,13 @@ int MidiConverter::read_write_track(FILE* file, FILE* output_file) {
 						//std::cout << "Current index: " << old_i << ", Event type: " << std::hex << (int)events[old_i].type << std::dec << ", Note: " << (int)events[old_i].event_data[0] << std::endl;
 					}
 					events[old_i].length = delta_time - events[old_i].length;
-					if (notesf == 0)
-						std::cout << "Note: " << note_name << octave << " " << events[old_i].length * microseconds_per_tick;
-					else
-						std::cout << ", Note: " << note_name << octave << " " << events[old_i].length * microseconds_per_tick;
+					std::string s;
+					if (notesf == 0) 
+						s = note_name + std::to_string(octave) + " " + std::to_string(events[old_i].length * microseconds_per_tick);
+					else 
+						s = ", " + note_name + std::to_string(octave) + " " + std::to_string(events[old_i].length * microseconds_per_tick);
+					std::cout << s;
+					fprintf(output_file, s.c_str());
 					delete_indices.push_back(i);
 					events.erase(events.begin() + old_i);
 					last_pos--;
@@ -261,13 +265,17 @@ int MidiConverter::read_write_track(FILE* file, FILE* output_file) {
 					//key signature
 				}
 				else if (ev[i].event_data[0] == 0x03) {
-					std::cout << "[Track name: " << std::string(ev[i].event_data.begin() + 2, ev[i].event_data.end()) << "]" << std::endl;
+					std::string s = "[Track name: " + std::string(ev[i].event_data.begin() + 2, ev[i].event_data.end()) + "]";
+					std::cout << s << std::endl;
+					fprintf(output_file, (s+'\n').c_str());
 				}
 				delete_indices.push_back(i);
 			}
 		}
-		if(notesf > 0)
+		if (notesf > 0) {
 			std::cout << std::endl;
+			fprintf(output_file, "\n");
+		}
 		for (int j = delete_indices.size() - 1; j >= 0; j--)
 			ev.erase(ev.begin() + delete_indices[j]);
 		delta_time = next_delta_time;
