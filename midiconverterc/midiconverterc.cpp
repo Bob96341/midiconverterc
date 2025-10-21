@@ -164,15 +164,63 @@ int MidiConverter::read_write_track(FILE* file, FILE* output_file) {
 	while (len > 0) {
 		std::vector<event> ev;
 		uint32_t delta_time = 0, next_delta_time = 0;
-		for (int i = 0; (ev[i] = read_event(file)).delta_time != 0; i++) {
+		ev.push_back(read_event(file));
+		/*std::cout << "Read event with delta time: " << ev[0].delta_time << std::endl;
+		std::cout << "Event type: " << std::hex << (int)ev[0].type << std::dec << std::endl;
+		std::cout << "Event length: " << ev[0].length << std::endl;
+		std::cout << "Event data: ";
+		for (int j = 0; j < ev[0].event_data.size(); j++) {
+			std::cout << std::hex << (int)ev[0].event_data[j] << " ";
+		}*/
+		for (int i = 0; ev[i].delta_time != 0; i++, ev.push_back(read_event(file))) {
 			if (ev[i].delta_time != 0) {
 				next_delta_time = delta_time + ev[i].delta_time;
 				/*fseek(file, -ev[i].length, SEEK_CUR);
 				ev.pop_back();*/
 				break; //this part will fail if the next time step doesn't have a note event
 			}
-			len -= ev[i].length;
+			len -= ev[i].length; //event.length might be irrelevant
 			
+		}
+		std::vector<int> delete_indices;
+		for(int i = 0; i < ev.size(); i++) {
+			if (ev[i].type == 0xFF && ev[i].event_data[0] == 0x2F) {
+				std::cout << "End of track event reached\n";
+				//process everything left in ev here
+				return 0;
+			}
+			if (ev[i].type == 0x90 || ev[i].type == 0x80) {
+				uint8_t note = ev[i].event_data[0];
+				uint8_t velocity = ev[i].event_data[1];
+				std::string note_name = NOTE_NAMES[note % 12];
+				int octave = (note / 12) - 1;
+
+				if(ev[i].type == 0x90 && velocity != 0) {
+					std::cout << "Note ON: " << note_name << octave << " Velocity: " << (int)velocity << std::endl;
+				} 
+				else if(ev[i].type == 0x80 || (ev[i].type == 0x90 && velocity == 0)){
+					std::cout << "Note OFF: " << note_name << octave << std::endl;
+					delete_indices.push_back(i);
+				}
+			}
+			else if (ev[i].type == 0xFF) {
+				//could replace with switch probably
+				if (ev[i].event_data[0] == 0x51) {
+					//set tempo
+				}
+				else if (ev[i].event_data[0] == 0x58) {
+					//time signature
+				}
+				else if (ev[i].event_data[0] == 0x59) {
+					//key signature
+				}
+				else if (ev[i].event_data[0] == 0x03) {
+					//track name
+				}
+				delete_indices.push_back(i);
+			}
+			for(int i = delete_indices.size() - 1; i >= 0; i--)
+				ev.erase(ev.begin() + delete_indices[i]);
 		}
 		//process concurrent events here then set delta_time to next_delta_time
 	}
